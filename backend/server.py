@@ -46,8 +46,8 @@ def create_refresh_token(user_id: str) -> str:
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 def set_auth_cookies(response: Response, access_token: str, refresh_token: str):
-    response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=3600, path="/")
-    response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
+    # Tokens are returned in JSON body, cookies are optional fallback
+    pass
 
 # ============================================================
 # DATABASE
@@ -282,29 +282,6 @@ logger = logging.getLogger("habitflow")
 # ============================================================
 app = FastAPI(title="HabitFlow API", lifespan=lifespan)
 
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response as StarletteResponse
-
-class DynamicCORSMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        origin = request.headers.get("origin", "")
-        if request.method == "OPTIONS":
-            response = StarletteResponse(status_code=200)
-            response.headers["Access-Control-Allow-Origin"] = origin or "*"
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-            response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, Cookie"
-            response.headers["Access-Control-Allow-Credentials"] = "true"
-            response.headers["Access-Control-Max-Age"] = "86400"
-            return response
-        response = await call_next(request)
-        response.headers["Access-Control-Allow-Origin"] = origin or "*"
-        response.headers["Access-Control-Allow-Credentials"] = "true"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, Cookie"
-        return response
-
-app.add_middleware(DynamicCORSMiddleware)
-
 # Global exception handler for unhandled errors
 from fastapi.responses import JSONResponse
 
@@ -353,11 +330,13 @@ async def register(req: RegisterRequest, response: Response):
 
         access = create_access_token(user_id, email)
         refresh = create_refresh_token(user_id)
-        set_auth_cookies(response, access, refresh)
 
         user = await db.users.find_one({"_id": result.inserted_id})
+        user_data = serialize_user(user)
+        user_data["access_token"] = access
+        user_data["refresh_token"] = refresh
         logger.info(f"Register success: email={email}")
-        return serialize_user(user)
+        return user_data
     except HTTPException:
         raise
     except Exception as e:
@@ -395,13 +374,13 @@ async def login(req: LoginRequest, request: Request, response: Response):
     user_id = str(user["_id"])
     access = create_access_token(user_id, email)
     refresh = create_refresh_token(user_id)
-    set_auth_cookies(response, access, refresh)
-    return serialize_user(user)
+    user_data = serialize_user(user)
+    user_data["access_token"] = access
+    user_data["refresh_token"] = refresh
+    return user_data
 
 @app.post("/api/auth/logout")
 async def logout(response: Response):
-    response.delete_cookie("access_token", path="/")
-    response.delete_cookie("refresh_token", path="/")
     return {"message": "Logged out"}
 
 @app.get("/api/auth/me")
@@ -411,7 +390,13 @@ async def get_me(request: Request):
 
 @app.post("/api/auth/refresh")
 async def refresh_token(request: Request, response: Response):
-    token = request.cookies.get("refresh_token")
+    body = await request.json()
+    token = body.get("refresh_token", "")
+    if not token:
+        # Fallback to header
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
     if not token:
         raise HTTPException(status_code=401, detail="No refresh token")
     try:
@@ -423,8 +408,9 @@ async def refresh_token(request: Request, response: Response):
             raise HTTPException(status_code=401, detail="User not found")
         user_id = str(user["_id"])
         access = create_access_token(user_id, user["email"])
-        response.set_cookie(key="access_token", value=access, httponly=True, secure=False, samesite="lax", max_age=3600, path="/")
-        return serialize_user(user)
+        user_data = serialize_user(user)
+        user_data["access_token"] = access
+        return user_data
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Refresh token expired")
     except jwt.InvalidTokenError:
