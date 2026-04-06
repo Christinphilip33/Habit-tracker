@@ -1,0 +1,85 @@
+{
+  "theme": "Light",
+  "archetype": "Archetype 1: Organic & Earthy",
+  "domain": "Habit Tracking & Productivity",
+  "design_philosophy": "A soft, tactile, inviting workspace. Instead of stark sterile metrics, we want a 'living' app feeling. The gamified plant growth widget drives an earthy, organic visual style.",
+  "colors": {
+    "background": "#F9F8F6",
+    "surface": "#FFFFFF",
+    "surface_secondary": "#F0F4F1",
+    "text_primary": "#1A2E20",
+    "text_secondary": "#5C6B61",
+    "primary": "#C86B53",
+    "primary_hover": "#B35A44",
+    "success": "#6B8E78",
+    "success_hover": "#5A7A66",
+    "border": "#E6DFD4"
+  },
+  "typography": {
+    "heading_font": "Outfit",
+    "body_font": "Manrope",
+    "font_import_url": "https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600&family=Outfit:wght@400;500;600;700&display=swap",
+    "h1": "text-4xl sm:text-5xl tracking-tight font-bold",
+    "h2": "text-2xl sm:text-3xl tracking-tight font-semibold",
+    "h3": "text-xl sm:text-2xl tracking-tight font-medium",
+    "body": "text-base leading-relaxed",
+    "label": "text-xs tracking-[0.2em] uppercase font-semibold"
+  },
+  "spacing_and_layout": {
+    "philosophy": "Generous Spacing: use 2-3x more padding. Elements need room to breathe, simulating a clean desk.",
+    "container_padding": "p-6 md:p-8 lg:p-12",
+    "grid_mode": "Mode B (Control Room) with wider gaps. grid-cols-1 md:grid-cols-3 lg:grid-cols-4, gap-6 or gap-8.",
+    "border_radius": "rounded-2xl"
+  },
+  "surface_strategies": {
+    "cards": "Flat background (Pure White), 1px subtle warm border (#E6DFD4), no heavy shadows by default. Hover: slight lift (-translate-y-1), shadow-lg, border darkens.",
+    "header": "Crystal Glassmorphism: backdrop-blur-xl, bg-[#F9F8F6]/80, 1px bottom border border-white/40.",
+    "buttons": "Tactile Neumorphism: Solid primary background, sharp 1px inner border, soft colored shadow for depth."
+  },
+  "motion": {
+    "hover": "transform scale-[1.02] transition-transform duration-200 ease-out",
+    "click": "scale-95",
+    "list_entrance": "staggered fade-up (framer-motion)"
+  },
+  "components_instructions": {
+    "shadcn_customization": "Strip generic Vercel borders. Apply our warm border color (#E6DFD4) and generous rounded corners (rounded-2xl).",
+    "habit_toggles": "Instead of small checkboxes, use large clickable surface cards that fill with the success color (#F0F4F1) and display a success checkmark when active.",
+    "heatmap": "Consistency heatmap should use organic, rounded squares (rounded-md) in varying opacities of the success color (#6B8E78).",
+    "plant_widget": "Use an earthy podium style frame. Prominently display the plant image URL based on level.",
+    "timer": "Display with large, clean typographic numbers. Use primary color (#C86B53) for the active timer ring.",
+    "test_attributes": "Add data-testid to all interactable elements (e.g., data-testid='habit-toggle-btn')."
+  },
+  "images": {
+    "hero": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/abdbbce0-fa81-4aaf-ba57-c8fe0e69a8b5/images/8daac1c0aaaa4aa239014a90326a09d44c7f35cbdc1c090a0dbbc3a04e680f5c.png",
+      "description": "Morning routine hero, aesthetic ceramic mug and notebook.",
+      "usage": "Use as main hero graphic on the landing page/auth page."
+    },
+    "background_pattern": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/abdbbce0-fa81-4aaf-ba57-c8fe0e69a8b5/images/c80db53bba2c9758df67f7ade700e9115ec9e22533286d1346cc3296bb20120f.png",
+      "description": "Organic topographic lines background.",
+      "usage": "Use as a subtle background layer for the Reward Shop or Analytics section."
+    },
+    "plant_level": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/abdbbce0-fa81-4aaf-ba57-c8fe0e69a8b5/images/12f1d23b5e558642614a96a0a6f4428c8b38af36ecbe8bd40730ae0d1c94cd6a.png",
+      "description": "3D claymation monstera plant on sage podium.",
+      "usage": "Use in the Plant Growth Gamification Widget on the dashboard."
+    },
+    "reward_item": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/abdbbce0-fa81-4aaf-ba57-c8fe0e69a8b5/images/d2b2469bb4a5a0cc17e9b70c3eb329e037610018063cc85bff428ca8a7499aa0.png",
+      "description": "Magical productivity potion bottle.",
+      "usage": "Use in the Reward Shop as an unlockable item."
+    },
+    "macro_leaf_1": {
+      "url": "https://images.unsplash.com/photo-1708028674046-0ffc248c0dfb?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzOTB8MHwxfHNlYXJjaHwxfHxwbGFudCUyMGxlYWYlMjBjbG9zZSUyMHVwJTIwbWFjcm98ZW58MHx8fHwxNzc1NDkyMzc1fDA&ixlib=rb-4.1.0&q=85",
+      "description": "Macro green leaf against sky.",
+      "usage": "Decorative usage on leveling up screens or streak milestones."
+    },
+    "macro_leaf_2": {
+      "url": "https://images.unsplash.com/photo-1637958567409-c6850e111597?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzOTB8MHwxfHNlYXJjaHwyfHxwbGFudCUyMGxlYWYlMjBjbG9zZSUyMHVwJTIwbWFjcm98ZW58MHx8fHwxNzc1NDkyMzc1fDA&ixlib=rb-4.1.0&q=85",
+      "description": "Large green leaf close up.",
+      "usage": "Secondary decorative usage for auth page background subtly blended."
+    }
+  },
+  "instructions_to_main_agent": "Implement a full-stack React+FastAPI app. Use the defined JSON theme for Tailwind config. Ensure all headings use 'Outfit' and body uses 'Manrope'. All interactive elements must have data-testid attributes. Do NOT use generic blue colors. Implement 'lucide-react' for icons with a stroke width of 1.5. Utilize the image URLs provided in their specific places to avoid placeholder text. Follow mobile-first spacing with ample breathing room (e.g., p-6 or p-8 inside cards)."
+}
