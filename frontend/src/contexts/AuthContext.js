@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import api, { formatApiError } from '../api';
+import api, { extractError } from '../api';
 
 const AuthContext = createContext(null);
 
@@ -20,7 +20,7 @@ export function AuthProvider({ children }) {
       setUser(data);
       return { success: true };
     } catch (e) {
-      return { success: false, error: formatApiError(e.response?.data?.detail) };
+      return { success: false, error: extractError(e) };
     }
   }, []);
 
@@ -30,7 +30,7 @@ export function AuthProvider({ children }) {
       setUser(data);
       return { success: true };
     } catch (e) {
-      return { success: false, error: formatApiError(e.response?.data?.detail) };
+      return { success: false, error: extractError(e) };
     }
   }, []);
 

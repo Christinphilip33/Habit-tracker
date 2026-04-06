@@ -8,7 +8,6 @@ import secrets
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Request, Response, Depends
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
@@ -273,18 +272,49 @@ async def seed_user_data(email: str):
             "rewards": [],
         })
 
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("habitflow")
+
 # ============================================================
 # APP
 # ============================================================
 app = FastAPI(title="HabitFlow API", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[os.environ.get("FRONTEND_URL", "http://localhost:3000")],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response as StarletteResponse
+
+class DynamicCORSMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        origin = request.headers.get("origin", "")
+        if request.method == "OPTIONS":
+            response = StarletteResponse(status_code=200)
+            response.headers["Access-Control-Allow-Origin"] = origin or "*"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, Cookie"
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Access-Control-Max-Age"] = "86400"
+            return response
+        response = await call_next(request)
+        response.headers["Access-Control-Allow-Origin"] = origin or "*"
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, Cookie"
+        return response
+
+app.add_middleware(DynamicCORSMiddleware)
+
+# Global exception handler for unhandled errors
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled error on {request.method} {request.url.path}: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc) if str(exc) else "Internal server error"},
+    )
 
 # ============================================================
 # HEALTH
@@ -298,33 +328,41 @@ async def health():
 # ============================================================
 @app.post("/api/auth/register")
 async def register(req: RegisterRequest, response: Response):
-    email = req.email.strip().lower()
-    if not email or "@" not in email:
-        raise HTTPException(status_code=400, detail="Invalid email")
-    if len(req.password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    logger.info(f"Register attempt: email={req.email}")
+    try:
+        email = req.email.strip().lower()
+        if not email or "@" not in email:
+            raise HTTPException(status_code=400, detail="Invalid email address")
+        if len(req.password) < 6:
+            raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
 
-    existing = await db.users.find_one({"email": email})
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
+        existing = await db.users.find_one({"email": email})
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already registered. Please sign in instead.")
 
-    hashed = hash_password(req.password)
-    result = await db.users.insert_one({
-        "email": email,
-        "password_hash": hashed,
-        "name": req.name[:50],
-        "role": "user",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    })
-    user_id = str(result.inserted_id)
-    await seed_user_data(email)
+        hashed = hash_password(req.password)
+        result = await db.users.insert_one({
+            "email": email,
+            "password_hash": hashed,
+            "name": req.name[:50],
+            "role": "user",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        user_id = str(result.inserted_id)
+        await seed_user_data(email)
 
-    access = create_access_token(user_id, email)
-    refresh = create_refresh_token(user_id)
-    set_auth_cookies(response, access, refresh)
+        access = create_access_token(user_id, email)
+        refresh = create_refresh_token(user_id)
+        set_auth_cookies(response, access, refresh)
 
-    user = await db.users.find_one({"_id": result.inserted_id})
-    return serialize_user(user)
+        user = await db.users.find_one({"_id": result.inserted_id})
+        logger.info(f"Register success: email={email}")
+        return serialize_user(user)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Register error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
 
 @app.post("/api/auth/login")
 async def login(req: LoginRequest, request: Request, response: Response):
