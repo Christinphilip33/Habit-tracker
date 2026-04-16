@@ -1,8 +1,40 @@
--e 
+# Dependencies
+node_modules/
+frontend/node_modules/
+
 # Environment files
-*.env
-*.env.*
--e 
-# Environment files
-*.env
-*.env.*
+.env
+.env.*
+.env.local
+.env.production
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+venv/
+.venv/
+
+# Build outputs
+frontend/build/
+dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git config (agent-generated)
+.gitconfig
+
+# Test reports
+test_reports/
+
+# Memory (generated at runtime)
+memory/

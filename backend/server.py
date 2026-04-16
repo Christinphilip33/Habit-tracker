@@ -2,12 +2,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import os
+import re
 import bcrypt
 import jwt
+import logging
 import secrets
+import time
+from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Request, Response, Depends
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
@@ -22,7 +27,11 @@ XP_WEEKLY_CAP = 4000
 XP_PER_LEVEL = 2000
 
 def get_jwt_secret():
-    return os.environ["JWT_SECRET"]
+    return _JWT_SECRET
+
+_JWT_SECRET = os.environ.get("JWT_SECRET", "")
+if not _JWT_SECRET or len(_JWT_SECRET) < 32:
+    raise RuntimeError("JWT_SECRET environment variable must be set and at least 32 characters")
 
 # ============================================================
 # PASSWORD HASHING
@@ -45,9 +54,31 @@ def create_refresh_token(user_id: str) -> str:
     payload = {"sub": user_id, "exp": datetime.now(timezone.utc) + timedelta(days=7), "type": "refresh"}
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
+IS_PRODUCTION = os.environ.get("ENVIRONMENT", "development") == "production"
+
 def set_auth_cookies(response: Response, access_token: str, refresh_token: str):
-    # Tokens are returned in JSON body, cookies are optional fallback
-    pass
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        secure=IS_PRODUCTION,
+        samesite="strict",
+        max_age=60 * 60,  # 1 hour
+        path="/",
+    )
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=IS_PRODUCTION,
+        samesite="strict",
+        max_age=7 * 24 * 60 * 60,  # 7 days
+        path="/api/auth/refresh",
+    )
+
+def clear_auth_cookies(response: Response):
+    response.delete_cookie(key="access_token", path="/")
+    response.delete_cookie(key="refresh_token", path="/api/auth/refresh")
 
 # ============================================================
 # DATABASE
@@ -219,7 +250,9 @@ async def lifespan(app: FastAPI):
 
 async def seed_admin():
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@habitflow.com").lower()
-    admin_password = os.environ.get("ADMIN_PASSWORD", "***REMOVED***")
+    admin_password = os.environ.get("ADMIN_PASSWORD")
+    if not admin_password:
+        raise RuntimeError("ADMIN_PASSWORD environment variable must be set")
     existing = await db.users.find_one({"email": admin_email})
     if existing is None:
         hashed = hash_password(admin_password)
@@ -232,15 +265,6 @@ async def seed_admin():
         })
         # Also seed default categories for admin
         await seed_user_data(admin_email)
-    elif not verify_password(admin_password, existing["password_hash"]):
-        await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_password)}})
-
-    # Write test credentials
-    os.makedirs("/app/memory", exist_ok=True)
-    with open("/app/memory/test_credentials.md", "w") as f:
-        f.write(f"# Test Credentials\n\n")
-        f.write(f"## Admin\n- Email: {admin_email}\n- Password: {admin_password}\n- Role: admin\n\n")
-        f.write(f"## Auth Endpoints\n- POST /api/auth/register\n- POST /api/auth/login\n- POST /api/auth/logout\n- GET /api/auth/me\n- POST /api/auth/refresh\n")
 
 async def seed_user_data(email: str):
     user = await db.users.find_one({"email": email})
@@ -272,8 +296,6 @@ async def seed_user_data(email: str):
             "rewards": [],
         })
 
-import logging
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("habitflow")
 
@@ -282,15 +304,72 @@ logger = logging.getLogger("habitflow")
 # ============================================================
 app = FastAPI(title="HabitFlow API", lifespan=lifespan)
 
-# Global exception handler for unhandled errors
-from fastapi.responses import JSONResponse
+# CORS
+from fastapi.middleware.cors import CORSMiddleware
 
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "").split(",")
+ALLOWED_ORIGINS = [o.strip() for o in ALLOWED_ORIGINS if o.strip()]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
+# Security headers
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        if IS_PRODUCTION:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        return response
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+# Rate limiting
+class RateLimiter:
+    """Simple in-memory sliding-window rate limiter."""
+    def __init__(self, max_requests: int = 60, window_seconds: int = 60):
+        self.max_requests = max_requests
+        self.window = window_seconds
+        self._hits = defaultdict(list)
+
+    def is_allowed(self, key: str) -> bool:
+        now = time.monotonic()
+        hits = self._hits[key]
+        # Prune old entries
+        self._hits[key] = [t for t in hits if now - t < self.window]
+        if len(self._hits[key]) >= self.max_requests:
+            return False
+        self._hits[key].append(now)
+        return True
+
+_rate_limiter = RateLimiter(max_requests=60, window_seconds=60)
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        client_ip = request.client.host if request.client else "unknown"
+        if not _rate_limiter.is_allowed(client_ip):
+            return JSONResponse(status_code=429, content={"detail": "Too many requests. Please slow down."})
+        return await call_next(request)
+
+app.add_middleware(RateLimitMiddleware)
+
+# Global exception handler for unhandled errors
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled error on {request.method} {request.url.path}: {exc}", exc_info=True)
     return JSONResponse(
         status_code=500,
-        content={"detail": str(exc) if str(exc) else "Internal server error"},
+        content={"detail": "Internal server error"},
     )
 
 # ============================================================
@@ -305,13 +384,15 @@ async def health():
 # ============================================================
 @app.post("/api/auth/register")
 async def register(req: RegisterRequest, response: Response):
-    logger.info(f"Register attempt: email={req.email}")
+    logger.info("Register attempt")
     try:
         email = req.email.strip().lower()
-        if not email or "@" not in email:
+        if not email or not re.match(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$', email):
             raise HTTPException(status_code=400, detail="Invalid email address")
-        if len(req.password) < 6:
-            raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+        if len(req.password) < 8:
+            raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+        if not re.search(r'[A-Z]', req.password) or not re.search(r'[a-z]', req.password) or not re.search(r'[0-9]', req.password):
+            raise HTTPException(status_code=400, detail="Password must contain uppercase, lowercase, and a number")
 
         existing = await db.users.find_one({"email": email})
         if existing:
@@ -333,15 +414,14 @@ async def register(req: RegisterRequest, response: Response):
 
         user = await db.users.find_one({"_id": result.inserted_id})
         user_data = serialize_user(user)
-        user_data["access_token"] = access
-        user_data["refresh_token"] = refresh
-        logger.info(f"Register success: email={email}")
+        set_auth_cookies(response, access, refresh)
+        logger.info("Register success")
         return user_data
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Register error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Registration failed. Please try again.")
 
 @app.post("/api/auth/login")
 async def login(req: LoginRequest, request: Request, response: Response):
@@ -375,12 +455,12 @@ async def login(req: LoginRequest, request: Request, response: Response):
     access = create_access_token(user_id, email)
     refresh = create_refresh_token(user_id)
     user_data = serialize_user(user)
-    user_data["access_token"] = access
-    user_data["refresh_token"] = refresh
+    set_auth_cookies(response, access, refresh)
     return user_data
 
 @app.post("/api/auth/logout")
 async def logout(response: Response):
+    clear_auth_cookies(response)
     return {"message": "Logged out"}
 
 @app.get("/api/auth/me")
@@ -390,10 +470,15 @@ async def get_me(request: Request):
 
 @app.post("/api/auth/refresh")
 async def refresh_token(request: Request, response: Response):
-    body = await request.json()
-    token = body.get("refresh_token", "")
+    # Read refresh token from cookie first, then fall back to body/header
+    token = request.cookies.get("refresh_token", "")
     if not token:
-        # Fallback to header
+        try:
+            body = await request.json()
+            token = body.get("refresh_token", "")
+        except Exception:
+            pass
+    if not token:
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
@@ -408,8 +493,9 @@ async def refresh_token(request: Request, response: Response):
             raise HTTPException(status_code=401, detail="User not found")
         user_id = str(user["_id"])
         access = create_access_token(user_id, user["email"])
+        refresh = create_refresh_token(user_id)
+        set_auth_cookies(response, access, refresh)
         user_data = serialize_user(user)
-        user_data["access_token"] = access
         return user_data
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Refresh token expired")
@@ -800,31 +886,58 @@ async def export_data(request: Request):
         "exportDate": datetime.now(timezone.utc).isoformat(),
     }
 
+ALLOWED_HABIT_FIELDS = {"id", "name", "identity", "category", "type", "targetValue", "unit",
+                        "frequency", "duration", "reminderTime", "startDate", "createdAt",
+                        "completions", "archived", "order"}
+ALLOWED_TASK_FIELDS = {"id", "title", "dueDate", "category", "completed", "createdAt"}
+ALLOWED_CATEGORY_FIELDS = {"id", "name", "icon", "color"}
+ALLOWED_XP_FIELDS = {"total", "weekStart", "weekXP", "streakProtectionsUsed", "availableXP"}
+
+def _sanitize_doc(doc: dict, allowed_fields: set) -> dict:
+    """Strip system fields and any fields not in the allowlist."""
+    return {k: v for k, v in doc.items() if k in allowed_fields}
+
 @app.post("/api/import")
 async def import_data(request: Request):
     user = await get_current_user(request)
     data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Invalid import data")
     user_id = user["_id"]
 
     if "habits" in data:
+        if not isinstance(data["habits"], list):
+            raise HTTPException(status_code=400, detail="habits must be a list")
         await db.habits.delete_many({"userId": user_id})
-        habits = [{"userId": user_id, **h} for h in data["habits"]]
+        habits = [{"userId": user_id, **_sanitize_doc(h, ALLOWED_HABIT_FIELDS)} for h in data["habits"] if isinstance(h, dict)]
         if habits:
             await db.habits.insert_many(habits)
 
     if "tasks" in data:
+        if not isinstance(data["tasks"], list):
+            raise HTTPException(status_code=400, detail="tasks must be a list")
         await db.tasks.delete_many({"userId": user_id})
-        tasks = [{"userId": user_id, **t} for t in data["tasks"]]
+        tasks = [{"userId": user_id, **_sanitize_doc(t, ALLOWED_TASK_FIELDS)} for t in data["tasks"] if isinstance(t, dict)]
         if tasks:
             await db.tasks.insert_many(tasks)
 
     if "categories" in data:
+        if not isinstance(data["categories"], list):
+            raise HTTPException(status_code=400, detail="categories must be a list")
         await db.categories.delete_many({"userId": user_id})
-        cats = [{"userId": user_id, **c} for c in data["categories"]]
+        cats = [{"userId": user_id, **_sanitize_doc(c, ALLOWED_CATEGORY_FIELDS)} for c in data["categories"] if isinstance(c, dict)]
         if cats:
             await db.categories.insert_many(cats)
 
     if "xp" in data:
-        await db.xp.update_one({"userId": user_id}, {"$set": data["xp"]}, upsert=True)
+        if not isinstance(data["xp"], dict):
+            raise HTTPException(status_code=400, detail="xp must be an object")
+        sanitized_xp = _sanitize_doc(data["xp"], ALLOWED_XP_FIELDS)
+        # Clamp XP values to sane bounds
+        if "total" in sanitized_xp:
+            sanitized_xp["total"] = max(0, min(int(sanitized_xp["total"]), 1_000_000))
+        if "weekXP" in sanitized_xp:
+            sanitized_xp["weekXP"] = max(0, min(int(sanitized_xp["weekXP"]), XP_WEEKLY_CAP))
+        await db.xp.update_one({"userId": user_id}, {"$set": sanitized_xp}, upsert=True)
 
     return {"message": "Data imported successfully"}

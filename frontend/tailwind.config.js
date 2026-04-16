@@ -4,22 +4,27 @@ module.exports = {
   theme: {
     extend: {
       colors: {
+        bg: '#F9F8F6',
         surface: {
-          DEFAULT: '#0e0e0e',
-          low: '#131313',
-          mid: '#1a1a1a',
-          high: '#20201f',
-          highest: '#262626',
-          bright: '#2c2c2c',
+          DEFAULT: '#FFFFFF',
+          secondary: '#F0F4F1',
         },
-        accent: {
-          purple: '#d1b3ff',
-          cyan: '#4af8e3',
-          pink: '#ff6c95',
+        'text-primary': '#1A2E20',
+        'text-secondary': '#5C6B61',
+        primary: {
+          DEFAULT: '#C86B53',
+          hover: '#B35A44',
         },
+        success: {
+          DEFAULT: '#6B8E78',
+          hover: '#5A7A66',
+        },
+        border: '#E6DFD4',
+        error: '#D94F4F',
       },
       fontFamily: {
-        sans: ['Plus Jakarta Sans', 'system-ui', 'sans-serif'],
+        heading: ['Outfit', 'system-ui', 'sans-serif'],
+        body: ['Manrope', 'system-ui', 'sans-serif'],
       },
     },
   },

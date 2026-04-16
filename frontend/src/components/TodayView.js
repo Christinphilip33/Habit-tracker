@@ -43,7 +43,7 @@ export default function TodayView({ habits, xp, categories, refresh, openHabitFo
       const res = await api.post(`/api/habits/${habitId}/toggle`, { dateKey: selectedDate });
       if (res.data.xpDelta > 0) showXPFly(habitId);
       refresh();
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error(e.message); }
   };
 
   const handleNumeric = async (habitId, delta) => {
@@ -51,7 +51,7 @@ export default function TodayView({ habits, xp, categories, refresh, openHabitFo
       await api.post(`/api/habits/${habitId}/numeric`, { dateKey: selectedDate, delta });
       if (delta > 0) showXPFly(habitId);
       refresh();
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error(e.message); }
   };
 
   const handleTimerComplete = async (habitId) => {
@@ -59,7 +59,7 @@ export default function TodayView({ habits, xp, categories, refresh, openHabitFo
       await api.post(`/api/habits/${habitId}/timer`, { dateKey: selectedDate, action: 'complete' });
       showXPFly(habitId);
       refresh();
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error(e.message); }
   };
 
   const getCatColor = (catId) => {

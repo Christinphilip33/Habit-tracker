@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import api, { extractError, setTokens, clearTokens, getToken } from '../api';
+import api, { extractError } from '../api';
 
 const AuthContext = createContext(null);
 
@@ -8,22 +8,16 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const token = getToken();
-    if (!token) {
-      setUser(false);
-      setLoading(false);
-      return;
-    }
+    // Check if we have a valid session via httpOnly cookie
     api.get('/api/auth/me')
       .then(res => setUser(res.data))
-      .catch(() => { clearTokens(); setUser(false); })
+      .catch(() => setUser(false))
       .finally(() => setLoading(false));
   }, []);
 
   const login = useCallback(async (email, password) => {
     try {
       const { data } = await api.post('/api/auth/login', { email, password });
-      setTokens(data.access_token, data.refresh_token);
       setUser(data);
       return { success: true };
     } catch (e) {
@@ -34,7 +28,6 @@ export function AuthProvider({ children }) {
   const register = useCallback(async (email, password, name) => {
     try {
       const { data } = await api.post('/api/auth/register', { email, password, name });
-      setTokens(data.access_token, data.refresh_token);
       setUser(data);
       return { success: true };
     } catch (e) {
@@ -44,7 +37,6 @@ export function AuthProvider({ children }) {
 
   const logout = useCallback(async () => {
     await api.post('/api/auth/logout').catch(() => {});
-    clearTokens();
     setUser(false);
   }, []);
 

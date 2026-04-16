@@ -4,6 +4,7 @@ HabitFlow Backend API Testing Suite
 Tests all API endpoints for the HabitFlow habit tracking application.
 """
 
+import os
 import requests
 import sys
 import json
@@ -11,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 
 class HabitFlowAPITester:
-    def __init__(self, base_url: str = "https://***REMOVED***"):
+    def __init__(self, base_url: str = os.environ.get("TEST_API_URL", "http://localhost:8000")):
         self.base_url = base_url
         self.session = requests.Session()
         self.tests_run = 0

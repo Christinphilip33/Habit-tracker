@@ -59,7 +59,7 @@ export default function HabitForm({ habit, categories, onClose, refresh }) {
       refresh();
       onClose();
     } catch (e) {
-      console.error(e);
+      console.error('Habit save failed:', e.message);
     } finally {
       setSaving(false);
     }

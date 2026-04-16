@@ -43,7 +43,7 @@ export default function Layout() {
       setCategories(c.data);
       setXp(x.data);
     } catch (e) {
-      console.error('Failed to fetch data:', e);
+      console.error('Failed to fetch data:', e.message);
     }
   }, []);
 
