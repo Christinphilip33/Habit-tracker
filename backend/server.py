@@ -46,12 +46,12 @@ def verify_password(plain: str, hashed: str) -> bool:
 # ============================================================
 # JWT TOKENS
 # ============================================================
-def create_access_token(user_id: str, email: str) -> str:
-    payload = {"sub": user_id, "email": email, "exp": datetime.now(timezone.utc) + timedelta(minutes=60), "type": "access"}
+def create_access_token(user_id: str, email: str, token_version: int = 0) -> str:
+    payload = {"sub": user_id, "email": email, "exp": datetime.now(timezone.utc) + timedelta(minutes=60), "type": "access", "tv": token_version}
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
-def create_refresh_token(user_id: str) -> str:
-    payload = {"sub": user_id, "exp": datetime.now(timezone.utc) + timedelta(days=7), "type": "refresh"}
+def create_refresh_token(user_id: str, token_version: int = 0) -> str:
+    payload = {"sub": user_id, "exp": datetime.now(timezone.utc) + timedelta(days=7), "type": "refresh", "tv": token_version}
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 IS_PRODUCTION = os.environ.get("ENVIRONMENT", "development") == "production"
@@ -85,6 +85,8 @@ def clear_auth_cookies(response: Response):
 # ============================================================
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "habitflow")
+if IS_PRODUCTION and "localhost" in MONGO_URL and "@" not in MONGO_URL:
+    raise RuntimeError("Production MongoDB must use an authenticated connection string (not unauthenticated localhost)")
 
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
@@ -107,6 +109,9 @@ async def get_current_user(request: Request) -> dict:
         user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
+        # Validate token version — logout invalidates all prior tokens
+        if payload.get("tv", 0) != user.get("token_version", 0):
+            raise HTTPException(status_code=401, detail="Session invalidated")
         user["_id"] = str(user["_id"])
         user.pop("password_hash", None)
         return user
@@ -137,81 +142,87 @@ DEFAULT_CATEGORIES = [
 # PYDANTIC MODELS
 # ============================================================
 class RegisterRequest(BaseModel):
-    email: str
-    password: str
-    name: str = "User"
+    email: str = Field(..., max_length=255)
+    password: str = Field(..., max_length=128)
+    name: str = Field(default="User", max_length=50)
 
 class LoginRequest(BaseModel):
-    email: str
-    password: str
+    email: str = Field(..., max_length=255)
+    password: str = Field(..., max_length=128)
+
+class HabitFrequency(BaseModel):
+    type: str = Field(default="daily", max_length=20)
+    days: list[int] = Field(default_factory=list)
+    interval: int = Field(default=2, ge=1, le=365)
+    perMonth: int = Field(default=5, ge=1, le=31)
 
 class HabitCreate(BaseModel):
-    name: str
-    identity: str = ""
-    category: str = ""
-    type: str = "toggle"
-    targetValue: int = 1
-    unit: str = ""
-    frequency: dict = Field(default_factory=lambda: {"type": "daily", "days": [], "interval": 2, "perMonth": 5})
-    duration: Optional[int] = None
-    reminderTime: str = ""
-    startDate: str = ""
+    name: str = Field(..., max_length=100)
+    identity: str = Field(default="", max_length=150)
+    category: str = Field(default="", max_length=50)
+    type: str = Field(default="toggle", max_length=10)
+    targetValue: int = Field(default=1, ge=1, le=10000)
+    unit: str = Field(default="", max_length=30)
+    frequency: HabitFrequency = Field(default_factory=HabitFrequency)
+    duration: Optional[int] = Field(default=None, ge=1, le=480)
+    reminderTime: str = Field(default="", max_length=10)
+    startDate: str = Field(default="", max_length=10)
 
 class HabitUpdate(BaseModel):
-    name: Optional[str] = None
-    identity: Optional[str] = None
-    category: Optional[str] = None
-    type: Optional[str] = None
-    targetValue: Optional[int] = None
-    unit: Optional[str] = None
-    frequency: Optional[dict] = None
-    duration: Optional[int] = None
-    reminderTime: Optional[str] = None
-    startDate: Optional[str] = None
+    name: Optional[str] = Field(default=None, max_length=100)
+    identity: Optional[str] = Field(default=None, max_length=150)
+    category: Optional[str] = Field(default=None, max_length=50)
+    type: Optional[str] = Field(default=None, max_length=10)
+    targetValue: Optional[int] = Field(default=None, ge=1, le=10000)
+    unit: Optional[str] = Field(default=None, max_length=30)
+    frequency: Optional[HabitFrequency] = None
+    duration: Optional[int] = Field(default=None, ge=1, le=480)
+    reminderTime: Optional[str] = Field(default=None, max_length=10)
+    startDate: Optional[str] = Field(default=None, max_length=10)
     archived: Optional[bool] = None
 
 class CompletionToggle(BaseModel):
-    dateKey: str
+    dateKey: str = Field(..., max_length=10)
 
 class NumericUpdate(BaseModel):
-    dateKey: str
-    delta: int
+    dateKey: str = Field(..., max_length=10)
+    delta: int = Field(..., ge=-10000, le=10000)
 
 class TimerAction(BaseModel):
-    dateKey: str
-    action: str  # "start", "pause", "reset"
-    durationMinutes: int = 10
+    dateKey: str = Field(..., max_length=10)
+    action: str = Field(..., max_length=10)
+    durationMinutes: int = Field(default=10, ge=1, le=480)
 
 class TaskCreate(BaseModel):
-    title: str
-    dueDate: str = ""
-    category: str = ""
+    title: str = Field(..., max_length=200)
+    dueDate: str = Field(default="", max_length=10)
+    category: str = Field(default="", max_length=50)
 
 class TaskUpdate(BaseModel):
-    title: Optional[str] = None
-    dueDate: Optional[str] = None
-    category: Optional[str] = None
+    title: Optional[str] = Field(default=None, max_length=200)
+    dueDate: Optional[str] = Field(default=None, max_length=10)
+    category: Optional[str] = Field(default=None, max_length=50)
     completed: Optional[bool] = None
 
 class CategoryCreate(BaseModel):
-    name: str
-    icon: str = "tag"
-    color: str = "#6B7280"
+    name: str = Field(..., max_length=50)
+    icon: str = Field(default="tag", max_length=20)
+    color: str = Field(default="#6B7280", max_length=20)
 
 class XPUpdate(BaseModel):
-    amount: int
+    amount: int = Field(..., ge=0, le=10000)
 
 class SettingsUpdate(BaseModel):
-    theme: Optional[str] = None
+    theme: Optional[str] = Field(default=None, max_length=20)
     notifications: Optional[bool] = None
 
 class RewardCreate(BaseModel):
-    name: str
-    cost: int
-    icon: str = "gift"
+    name: str = Field(..., max_length=100)
+    cost: int = Field(..., ge=0, le=100000)
+    icon: str = Field(default="gift", max_length=20)
 
 class RewardPurchase(BaseModel):
-    rewardId: str
+    rewardId: str = Field(..., max_length=20)
 
 # ============================================================
 # HELPER FUNCTIONS
@@ -261,6 +272,7 @@ async def seed_admin():
             "password_hash": hashed,
             "name": "Admin",
             "role": "admin",
+            "token_version": 0,
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         # Also seed default categories for admin
@@ -308,7 +320,9 @@ app = FastAPI(title="HabitFlow API", lifespan=lifespan)
 from fastapi.middleware.cors import CORSMiddleware
 
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "").split(",")
-ALLOWED_ORIGINS = [o.strip() for o in ALLOWED_ORIGINS if o.strip()]
+ALLOWED_ORIGINS = [o.strip() for o in ALLOWED_ORIGINS if o.strip() and o.strip() != "*"]
+if IS_PRODUCTION and not ALLOWED_ORIGINS:
+    raise RuntimeError("ALLOWED_ORIGINS must be set in production (comma-separated list of allowed origins, '*' is not permitted)")
 
 app.add_middleware(
     CORSMiddleware,
@@ -326,8 +340,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["X-XSS-Protection"] = "0"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; font-src 'self' https:; object-src 'none'; frame-ancestors 'none'"
         if IS_PRODUCTION:
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response
@@ -335,33 +350,67 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 app.add_middleware(SecurityHeadersMiddleware)
 
 # Rate limiting
+TRUSTED_PROXY_HEADER = os.environ.get("TRUSTED_PROXY_HEADER", "")  # e.g. "X-Forwarded-For"
+RATE_LIMIT_MAX_KEYS = 10_000  # Cap to prevent OOM from spoofed IPs
+
 class RateLimiter:
-    """Simple in-memory sliding-window rate limiter."""
+    """Sliding-window rate limiter with bounded cache."""
     def __init__(self, max_requests: int = 60, window_seconds: int = 60):
         self.max_requests = max_requests
         self.window = window_seconds
-        self._hits = defaultdict(list)
+        self._hits: dict[str, list[float]] = {}
+
+    def _evict_if_full(self):
+        """Evict oldest entries if cache exceeds max keys."""
+        if len(self._hits) > RATE_LIMIT_MAX_KEYS:
+            # Remove the oldest half of entries
+            sorted_keys = sorted(self._hits.keys(), key=lambda k: self._hits[k][-1] if self._hits[k] else 0)
+            for k in sorted_keys[:len(sorted_keys) // 2]:
+                del self._hits[k]
 
     def is_allowed(self, key: str) -> bool:
         now = time.monotonic()
-        hits = self._hits[key]
-        # Prune old entries
-        self._hits[key] = [t for t in hits if now - t < self.window]
-        if len(self._hits[key]) >= self.max_requests:
+        hits = self._hits.get(key, [])
+        # Prune expired entries
+        hits = [t for t in hits if now - t < self.window]
+        if len(hits) >= self.max_requests:
+            self._hits[key] = hits
             return False
-        self._hits[key].append(now)
+        hits.append(now)
+        self._hits[key] = hits
+        self._evict_if_full()
         return True
 
 _rate_limiter = RateLimiter(max_requests=60, window_seconds=60)
 
+def _get_client_ip(request: Request) -> str:
+    """Extract real client IP, respecting trusted proxy headers."""
+    if TRUSTED_PROXY_HEADER:
+        forwarded = request.headers.get(TRUSTED_PROXY_HEADER, "")
+        if forwarded:
+            # First IP in the chain is the original client
+            return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = _get_client_ip(request)
         if not _rate_limiter.is_allowed(client_ip):
             return JSONResponse(status_code=429, content={"detail": "Too many requests. Please slow down."})
         return await call_next(request)
 
 app.add_middleware(RateLimitMiddleware)
+
+# Origin verification middleware for CSRF defense-in-depth
+class OriginVerificationMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        if request.method in ("POST", "PUT", "DELETE") and ALLOWED_ORIGINS:
+            origin = request.headers.get("Origin", "")
+            if origin and origin not in ALLOWED_ORIGINS:
+                return JSONResponse(status_code=403, content={"detail": "Origin not allowed"})
+        return await call_next(request)
+
+app.add_middleware(OriginVerificationMiddleware)
 
 # Global exception handler for unhandled errors
 @app.exception_handler(Exception)
@@ -404,13 +453,14 @@ async def register(req: RegisterRequest, response: Response):
             "password_hash": hashed,
             "name": req.name[:50],
             "role": "user",
+            "token_version": 0,
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         user_id = str(result.inserted_id)
         await seed_user_data(email)
 
-        access = create_access_token(user_id, email)
-        refresh = create_refresh_token(user_id)
+        access = create_access_token(user_id, email, token_version=0)
+        refresh = create_refresh_token(user_id, token_version=0)
 
         user = await db.users.find_one({"_id": result.inserted_id})
         user_data = serialize_user(user)
@@ -426,7 +476,7 @@ async def register(req: RegisterRequest, response: Response):
 @app.post("/api/auth/login")
 async def login(req: LoginRequest, request: Request, response: Response):
     email = req.email.strip().lower()
-    ip = request.client.host if request.client else "unknown"
+    ip = _get_client_ip(request)
     identifier = f"{ip}:{email}"
 
     # Brute force check
@@ -452,14 +502,21 @@ async def login(req: LoginRequest, request: Request, response: Response):
     await db.login_attempts.delete_one({"identifier": identifier})
 
     user_id = str(user["_id"])
-    access = create_access_token(user_id, email)
-    refresh = create_refresh_token(user_id)
+    tv = user.get("token_version", 0)
+    access = create_access_token(user_id, email, token_version=tv)
+    refresh = create_refresh_token(user_id, token_version=tv)
     user_data = serialize_user(user)
     set_auth_cookies(response, access, refresh)
     return user_data
 
 @app.post("/api/auth/logout")
-async def logout(response: Response):
+async def logout(request: Request, response: Response):
+    # Increment token_version to invalidate all existing tokens
+    try:
+        user = await get_current_user(request)
+        await db.users.update_one({"_id": ObjectId(user["_id"])}, {"$inc": {"token_version": 1}})
+    except HTTPException:
+        pass  # Already invalid or no token — still clear cookies
     clear_auth_cookies(response)
     return {"message": "Logged out"}
 
@@ -491,9 +548,13 @@ async def refresh_token(request: Request, response: Response):
         user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
+        # Validate token version
+        if payload.get("tv", 0) != user.get("token_version", 0):
+            raise HTTPException(status_code=401, detail="Session invalidated")
         user_id = str(user["_id"])
-        access = create_access_token(user_id, user["email"])
-        refresh = create_refresh_token(user_id)
+        tv = user.get("token_version", 0)
+        access = create_access_token(user_id, user["email"], token_version=tv)
+        refresh = create_refresh_token(user_id, token_version=tv)
         set_auth_cookies(response, access, refresh)
         user_data = serialize_user(user)
         return user_data
@@ -524,7 +585,7 @@ async def create_habit(req: HabitCreate, request: Request):
         "type": req.type if req.type in ("toggle", "numeric", "timer") else "toggle",
         "targetValue": max(1, min(10000, req.targetValue)),
         "unit": req.unit[:30],
-        "frequency": req.frequency,
+        "frequency": req.frequency.dict(),
         "duration": max(1, min(480, req.duration)) if req.duration else None,
         "reminderTime": req.reminderTime,
         "startDate": req.startDate or today_key(),
@@ -642,8 +703,26 @@ async def timer_action(habit_id: str, req: TimerAction, request: Request):
         raise HTTPException(status_code=404, detail="Habit not found")
 
     completions = habit.get("completions", {})
+    comp = completions.get(req.dateKey)
+    if not comp or isinstance(comp, str):
+        comp = {"status": comp if isinstance(comp, str) else "pending"}
+
+    if req.action == "start":
+        comp["timer_start"] = datetime.now(timezone.utc).isoformat()
+        completions[req.dateKey] = comp
+        await db.habits.update_one({"id": habit_id, "userId": user["_id"]}, {"$set": {"completions": completions}})
+        return {"status": "started"}
+
     if req.action == "complete":
-        completions[req.dateKey] = "completed"
+        start_time = comp.get("timer_start")
+        if not start_time:
+            raise HTTPException(status_code=400, detail="Timer not started")
+        elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(start_time)).total_seconds()
+        expected = (habit.get("duration") or 10) * 60
+        if elapsed < expected - 10:
+            raise HTTPException(status_code=400, detail="Timer completed too early")
+        comp["status"] = "completed"
+        completions[req.dateKey] = comp
         await db.habits.update_one({"id": habit_id, "userId": user["_id"]}, {"$set": {"completions": completions}})
         await update_xp(user["_id"], XP_PER_COMPLETION)
         return {"status": "completed"}
@@ -655,11 +734,23 @@ async def reorder_habits(request: Request):
     user = await get_current_user(request)
     body = await request.json()
     ordered_ids = body.get("orderedIds", [])
-    habits = await db.habits.find({"userId": user["_id"]}).to_list(500)
-    id_map = {h["id"]: h for h in habits}
-    for i, hid in enumerate(ordered_ids):
-        if hid in id_map:
-            await db.habits.update_one({"id": hid, "userId": user["_id"]}, {"$set": {"order": i}})
+    if not isinstance(ordered_ids, list):
+        raise HTTPException(status_code=400, detail="orderedIds must be a list")
+    # Deduplicate while preserving order, cap at 500
+    seen = set()
+    unique_ids = []
+    for hid in ordered_ids:
+        if isinstance(hid, str) and hid not in seen and len(unique_ids) < 500:
+            seen.add(hid)
+            unique_ids.append(hid)
+    # Bulk write instead of individual updates
+    from pymongo import UpdateOne
+    habits = await db.habits.find({"userId": user["_id"]}, {"id": 1}).to_list(500)
+    valid_ids = {h["id"] for h in habits}
+    ops = [UpdateOne({"id": hid, "userId": user["_id"]}, {"$set": {"order": i}})
+           for i, hid in enumerate(unique_ids) if hid in valid_ids]
+    if ops:
+        await db.habits.bulk_write(ops, ordered=False)
     return {"message": "Reordered"}
 
 # ============================================================
@@ -815,7 +906,7 @@ async def update_settings(req: SettingsUpdate, request: Request):
 @app.post("/api/settings/rewards")
 async def add_reward(req: RewardCreate, request: Request):
     user = await get_current_user(request)
-    reward = {"id": secrets.token_hex(8), "name": req.name[:100], "cost": min(req.cost, 100000), "icon": req.icon[:10]}
+    reward = {"id": secrets.token_hex(8), "name": req.name[:100], "cost": max(0, min(req.cost, 100000)), "icon": req.icon[:10]}
     await db.settings.update_one({"userId": user["_id"]}, {"$push": {"rewards": reward}}, upsert=True)
     return reward
 
@@ -906,24 +997,24 @@ async def import_data(request: Request):
     user_id = user["_id"]
 
     if "habits" in data:
-        if not isinstance(data["habits"], list):
-            raise HTTPException(status_code=400, detail="habits must be a list")
+        if not isinstance(data["habits"], list) or len(data["habits"]) > 1000:
+            raise HTTPException(status_code=400, detail="habits must be a list (max 1000)")
         await db.habits.delete_many({"userId": user_id})
         habits = [{"userId": user_id, **_sanitize_doc(h, ALLOWED_HABIT_FIELDS)} for h in data["habits"] if isinstance(h, dict)]
         if habits:
             await db.habits.insert_many(habits)
 
     if "tasks" in data:
-        if not isinstance(data["tasks"], list):
-            raise HTTPException(status_code=400, detail="tasks must be a list")
+        if not isinstance(data["tasks"], list) or len(data["tasks"]) > 1000:
+            raise HTTPException(status_code=400, detail="tasks must be a list (max 1000)")
         await db.tasks.delete_many({"userId": user_id})
         tasks = [{"userId": user_id, **_sanitize_doc(t, ALLOWED_TASK_FIELDS)} for t in data["tasks"] if isinstance(t, dict)]
         if tasks:
             await db.tasks.insert_many(tasks)
 
     if "categories" in data:
-        if not isinstance(data["categories"], list):
-            raise HTTPException(status_code=400, detail="categories must be a list")
+        if not isinstance(data["categories"], list) or len(data["categories"]) > 100:
+            raise HTTPException(status_code=400, detail="categories must be a list (max 100)")
         await db.categories.delete_many({"userId": user_id})
         cats = [{"userId": user_id, **_sanitize_doc(c, ALLOWED_CATEGORY_FIELDS)} for c in data["categories"] if isinstance(c, dict)]
         if cats:
@@ -938,6 +1029,10 @@ async def import_data(request: Request):
             sanitized_xp["total"] = max(0, min(int(sanitized_xp["total"]), 1_000_000))
         if "weekXP" in sanitized_xp:
             sanitized_xp["weekXP"] = max(0, min(int(sanitized_xp["weekXP"]), XP_WEEKLY_CAP))
+        if "availableXP" in sanitized_xp:
+            sanitized_xp["availableXP"] = max(0, min(int(sanitized_xp["availableXP"]), 1_000_000))
+        if "streakProtectionsUsed" in sanitized_xp:
+            sanitized_xp["streakProtectionsUsed"] = max(0, min(int(sanitized_xp["streakProtectionsUsed"]), 100))
         await db.xp.update_one({"userId": user_id}, {"$set": sanitized_xp}, upsert=True)
 
     return {"message": "Data imported successfully"}

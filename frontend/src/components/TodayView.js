@@ -315,9 +315,14 @@ function TimerButton({ habit, dateKey, onComplete }) {
   const [seconds, setSeconds] = useState((habit.duration || 10) * 60);
   const [running, setRunning] = useState(false);
   const intervalRef = useRef(null);
+  const startedRef = useRef(false);
 
   useEffect(() => {
     if (running) {
+      if (!startedRef.current) {
+        api.post(`/api/habits/${habit.id}/timer`, { action: 'start', dateKey }).catch(()=>{});
+        startedRef.current = true;
+      }
       intervalRef.current = setInterval(() => {
         setSeconds(prev => {
           if (prev <= 1) {

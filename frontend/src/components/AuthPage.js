@@ -15,6 +15,12 @@ export default function AuthPage() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    if (mode === 'register') {
+      if (password.length < 8) { setError('Password must be at least 8 characters'); return; }
+      if (!/[A-Z]/.test(password)) { setError('Password must contain an uppercase letter'); return; }
+      if (!/[a-z]/.test(password)) { setError('Password must contain a lowercase letter'); return; }
+      if (!/[0-9]/.test(password)) { setError('Password must contain a number'); return; }
+    }
     setLoading(true);
     const result = mode === 'login'
       ? await login(email, password)
@@ -103,9 +109,9 @@ export default function AuthPage() {
                   type={showPass ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="At least 6 characters"
+                  placeholder="At least 8 characters (A-z, 0-9)"
                   required
-                  minLength={6}
+                  minLength={8}
                   className="w-full px-5 py-4 bg-[#F9F8F6] border border-[#E6DFD4] rounded-xl text-[#1A2E20] placeholder:text-[#B0AFA9] focus:outline-none focus:border-[#C86B53] focus:ring-2 focus:ring-[#C86B53]/10 transition-all pr-12"
                 />
                 <button
