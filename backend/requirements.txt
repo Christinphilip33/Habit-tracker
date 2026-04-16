@@ -1,3 +1,9 @@
 fastapi
 uvicorn[standard]
 python-multipart
+python-dotenv
+bcrypt
+PyJWT
+motor
+pymongo
+pydantic
